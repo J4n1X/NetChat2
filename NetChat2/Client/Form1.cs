@@ -7,17 +7,23 @@ namespace NetChat2
 {
     public partial class Form1 : Form
     {
-        private Client client = new Client();
+        private Client client;
+        private Server server;
         public Form1()
         {
             InitializeComponent();
+            ToastNotificationManagerCompat.OnActivated += toast_OnActivation;
+        }
+
+        private void bindClientEvents()
+        {
+            if (client == null)
+                throw new ArgumentException("Client is not initialized");
             client.OnServerConnect += client_Connected;
             client.OnTextFromServer += client_TextFromClient;
             client.OnServerConnectFail += client_ConnectionFail;
             client.OnServerDisconnect += client_Disconnected;
-            ToastNotificationManagerCompat.OnActivated += toast_OnActivation;
         }
-
 
         private void connectButton_Click(object sender, EventArgs e)
         {
@@ -27,7 +33,11 @@ namespace NetChat2
             var userNameForm = new UserNameForm();
             if (userNameForm.ShowDialog() == DialogResult.Cancel)
                 return;
+
+            client = new Client();
+            bindClientEvents();
             client.Connect(ipTextBox.Text, port, userNameForm.UserName);
+
             connectionStatusLabel.Text = "Connecting to " + ipTextBox.Text + "...";
         }
 
@@ -39,10 +49,12 @@ namespace NetChat2
             var userNameForm = new UserNameForm();
             if (userNameForm.ShowDialog() == DialogResult.Cancel)
                 return;
-            client.StartServer(ipTextBox.Text, port);
-            while (!client.LocalServer.Available)
-                System.Threading.Thread.Sleep(10);
+            server = new Server(ipTextBox.Text, port);
+
+            client = new Client();
+            bindClientEvents();
             client.Connect(ipTextBox.Text, port, userNameForm.UserName);
+
             connectionStatusLabel.Text = "Hosting on " + ipTextBox.Text + " Port " + port;
         }
 

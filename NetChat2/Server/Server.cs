@@ -26,6 +26,9 @@ namespace NetChat2
 
         #endregion
 
+        public Server() { }
+        public Server(string localIP, int port = 9000) => Listen(localIP, port);
+
         public void Listen(string localIP, int port = 9000)
         {
             if (!available)
@@ -35,12 +38,13 @@ namespace NetChat2
                 listener = new TcpListener(IPAddress.Any, this.port);
 
                 listener.Start();
-                Task.Run(async () =>
+                
+                ThreadPool.QueueUserWorkItem(async delegate
                 {
-                    Thread.CurrentThread.Name = "Server Thread";
+                    Thread.CurrentThread.Name = "Listener Thread";
                     try
                     {
-                        while (!needToCleanUp)
+                        while (!disposing)
                         {
                             listenerToken.Token.ThrowIfCancellationRequested();
                             ProcessNewClient(await listener.AcceptTcpClientAsync());
@@ -50,8 +54,7 @@ namespace NetChat2
                     {
                         listener.Stop();
                     }
-                },
-                listenerToken.Token);
+                });
             }
             this.available = true;
         }
@@ -108,26 +111,6 @@ namespace NetChat2
             foreach (var client in clients.Values)
             {
                 client.Write(flags, messageBytes);
-
-                //var stream = client.Client.GetStream();
-                //var outBuffer = new List<byte>();
-                //int cycles = messageBytes.Length / ushort.MaxValue;
-
-                //for (int i = 0; i < cycles; i++)
-                //{
-                //    // TODO: Rewrite this
-                //    outBuffer.Clear();
-                //    outBuffer.Add((byte)flags);
-                //    outBuffer.AddRange(messageBytes[(i * ushort.MaxValue)..((i + 1) * ushort.MaxValue)]);
-                //    outBuffer.InsertRange(1, BitConverter.GetBytes(Convert.ToUInt16(outBuffer.Count - 1)));
-                //    stream.Write(outBuffer.ToArray(), 0, outBuffer.Count);
-                //}
-                //outBuffer.Clear();
-                //outBuffer.Add((byte)flags);
-                //outBuffer.AddRange(messageBytes[(cycles * ushort.MaxValue)..messageBytes.Length]);
-                //outBuffer.InsertRange(1, BitConverter.GetBytes(Convert.ToUInt16(outBuffer.Count - 1)));
-                //stream.Write(outBuffer.ToArray(), 0, outBuffer.Count);
-
             }
         }
 
@@ -135,17 +118,17 @@ namespace NetChat2
         {
 
             var client = ((ServerClient)sender);
-            SendText(client.UserName + " has disconnected!\n", TextFlags.Unicode | TextFlags.NoUserName);
-
             clients.Remove(((ServerClient)sender).Guid);
+            SendText(client.UserName + " has disconnected!\n", TextFlags.Unicode | TextFlags.NoUserName);
+            client.Dispose();
         }
 
         public new void Dispose()
         {
-            needToCleanUp = true;
+            disposing = true;
             foreach (var client in clients)
             {
-                if (!client.Value.ClientTask.IsCompleted)
+                if (client.Value.Available)
                 {
                     client.Value.Dispose();
                     clients.Remove(client.Key);

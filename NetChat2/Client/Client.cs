@@ -32,12 +32,9 @@ namespace NetChat2
 
         public NetChatClient client;
 
-        private CancellationTokenSource clientToken = new CancellationTokenSource();
-
         private Guid clientID;
         public Guid ClientID { get { return clientID; } }
-        private Server localServer = new Server();
-        public Server LocalServer { get { return localServer; } }
+
         private IPAddress serverAddress;
         public IPAddress ServerAddress { get { return serverAddress; } }
         private string userName = "";
@@ -49,13 +46,7 @@ namespace NetChat2
 
         #endregion
 
-        public void StartServer(string localIP, int port)
-        {
-            if (available)
-                return;
-            
-            localServer.Listen(localIP, port);
-        }
+        public Client() { }
 
         public void Connect(string peerIp, int port, string userName)
         {
@@ -106,17 +97,16 @@ namespace NetChat2
                                 UserName
                             );
 
-                            Task.Run(() =>
+                            ThreadPool.QueueUserWorkItem(delegate
                             {
                                 Thread.CurrentThread.Name = "Client Thread";
-                                while (!needToCleanUp)
+                                while (!disposing)
                                     Update();
-                            },
-                            clientToken.Token);
+                            });
                             
                             if (OnServerConnect != null) OnServerConnect(this, connectMessage);
                         }
-                        else
+                        else if(((ServerFlags)client.Read().Flag != ServerFlags.InvalidUserName))
                         {
                             if(OnServerConnectFail != null) OnServerConnectFail(this, "The Username specified is invalid or too long.");
                             return;
@@ -144,20 +134,29 @@ namespace NetChat2
             {
                 var command = client.Read();
 
-                if ((command.Flag & 0b00001111) == (byte)TextFlags.Base) // Text
+                if(command.Flag == 255)
+                    throw new System.IO.IOException("Failed to read from Stream");
+
+                switch (command.Flag & 0b00001111) 
                 {
-                    // decode so we can do things like filter text later
-                    string message = GetText(command.Data, (TextFlags)command.Flag);
-                    if (OnTextFromServer != null) OnTextFromServer(this, message);
-                }
-                else if ((command.Flag & 0b00001111) == (byte)DataFlags.Base) ; // Data
-                else if ((command.Flag & 0b00001111) == (byte)ServerFlags.Base) ; // Server responses
+                    case (byte)TextFlags.Base: // Text
+                        {
+                            // decode so we can do things like filter text later
+                            string message = GetText(command.Data, (TextFlags)command.Flag);
+                            if (OnTextFromServer != null) OnTextFromServer(this, message);
+                            break;
+                        }
+
+                    case (byte)DataFlags.Base: // Data
+                        break;
+                    case (byte)ServerFlags.Base: // Server responses
+                        break;
+                } 
             }
             catch (System.IO.IOException e)
             {
-                Disconnect();
-                if(OnServerDisconnect != null) OnServerDisconnect(this, "Server closed connection");
-                available = false;
+                // Simply close client
+                Dispose();
             }
         }
 
@@ -179,7 +178,6 @@ namespace NetChat2
             if (!available)
                 return;
             client.Write(ClientFlags.Disconnect);
-            clientToken.Cancel();
             client.Dispose();
             available = false;
         }
@@ -199,22 +197,18 @@ namespace NetChat2
 
         public new void Dispose()
         {
-            localServer.Dispose();
             if (client != null)
             {
                 if (client.Available)
                 {
+                    base.Dispose();
                     Disconnect();
-                    client.Dispose();
                 }
             }
-            needToCleanUp = true;
         }
 
         ~Client()
         {
-            if(localServer.Available)
-                localServer.Dispose();
             Dispose();
         }
     }

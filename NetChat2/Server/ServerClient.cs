@@ -28,9 +28,6 @@ namespace NetChat2
         private string userName;
         public string UserName { get { return userName; } }
 
-        private Task clientTask;
-        public Task ClientTask { get { return clientTask; } }
-
         private Guid guid;
         public Guid Guid { get { return guid; } }
 
@@ -41,16 +38,7 @@ namespace NetChat2
             this.guid = guid;
             ipAddress = ((IPEndPoint)client.Client.RemoteEndPoint).Address;
 
-            clientTask = new Task(() =>
-            {
-                while (!needToCleanUp)
-                {
-                    ReadClient(Read());
-                }
-                client.Close();
-                client.Dispose();
-            });
-            clientTask.Start();
+            StartTask();
             available = true;
         }
 
@@ -71,22 +59,32 @@ namespace NetChat2
             }
             this.userName = GetText(connectRequest.Data, TextFlags.Unicode);
             this.guid = Guid.NewGuid();
-            Write(ServerFlags.ConnectSuccess, guid.ToByteArray());
-
             ipAddress = ((IPEndPoint)client.Client.RemoteEndPoint).Address;
+            Write(ServerFlags.ConnectSuccess, guid.ToByteArray());
+            
+            StartTask();
+            available = true;
+        }
 
-            clientTask = new Task(() =>
+        private void StartTask()
+        {
+            ThreadPool.QueueUserWorkItem(delegate
             {
                 Thread.CurrentThread.Name = "Server-Client Thread";
-                while (!needToCleanUp)
+                while (!disposing)
                 {
-                    ReadClient(Read());
+                    try
+                    {
+                        ReadClient(Read());
+                    }
+                    catch
+                    {
+                        break;
+                    }
                 }
-                client.Close();
-                client.Dispose();
+                base.Dispose();
+                available = false;
             });
-            clientTask.Start();
-            available = true;
         }
 
         private void ReadClient(Packet command)
@@ -145,7 +143,7 @@ namespace NetChat2
 
         public new void Dispose()
         {
-            needToCleanUp = true;
+            disposing = true;
         }
 
         ~ServerClient()

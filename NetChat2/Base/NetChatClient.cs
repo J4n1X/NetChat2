@@ -72,14 +72,24 @@ namespace NetChat2
 
         public Packet Read()
         {
+            if (!available)
+                throw new System.IO.IOException("Client is not available");
+
             var retPacket = new Packet();
-            retPacket.Flag = (byte)stream.ReadByte();
-            byte[] buffer = new byte[2];
-            stream.Read(buffer, 0, buffer.Length);
-            retPacket.SetDataSizeFromBytes(buffer);
-            if(retPacket.Size > 0)
-                stream.Read(retPacket.Data, 0, retPacket.Data.Length);
-            return retPacket;
+            try
+            {
+                retPacket.Flag = (byte)stream.ReadByte();
+                byte[] buffer = new byte[2];
+                stream.Read(buffer, 0, buffer.Length);
+                retPacket.SetDataSizeFromBytes(buffer);
+                if (retPacket.Size > 0)
+                    stream.Read(retPacket.Data, 0, retPacket.Data.Length);
+                return retPacket;
+            }
+            catch
+            {
+                throw;
+            }
         }
 
 
@@ -93,6 +103,9 @@ namespace NetChat2
 
         public void Write(byte flags, byte[] data = null)
         {
+            if (!available)
+                throw new System.IO.IOException("Client is not available");
+
             data = data ?? new byte[0];
             if (!client.Connected)
                 return;
@@ -110,13 +123,30 @@ namespace NetChat2
             stream.Write(data[(cycles * ushort.MaxValue)..data.Length], 0, finalLength);
         }
 
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!base.disposing)
+            {
+                if (disposing)
+                {
+                    
+                }
+            }
+        }
+
         public new void Dispose()
         {
-            this.client.Close();
+            if (!disposing)
+            {
+                base.Dispose(); // turn off threads
+                stream.Close();
+                client.Close();
+            }
+            GC.SuppressFinalize(this);
         }
         ~NetChatClient()
         {
-            this.client.Close();
+            Dispose(false);
         }
     }
 }

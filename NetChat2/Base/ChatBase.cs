@@ -111,7 +111,7 @@ namespace NetChat2
             get { return localAddress; }
         }
 
-        protected volatile bool needToCleanUp = false;
+        protected volatile bool disposing = false;
 
         public static string GetText(byte[] data, TextFlags flags)
         {
@@ -153,15 +153,15 @@ namespace NetChat2
                     return Encoding.UTF32.GetBytes(text);
             }
         }
-
+        
         public void Dispose()
         {
-            needToCleanUp = true;
+            disposing = true;
         }
 
         ~ChatBase()
         {
-            needToCleanUp = true;
+            disposing = true;
         }
     }
 }
