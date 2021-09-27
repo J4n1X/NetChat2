@@ -86,9 +86,10 @@ namespace NetChat2
                     stream.Read(retPacket.Data, 0, retPacket.Data.Length);
                 return retPacket;
             }
-            catch
+            catch(ObjectDisposedException ex)
             {
-                throw;
+                if(disposing) return null;
+                throw ex;
             }
         }
 
@@ -123,30 +124,20 @@ namespace NetChat2
             stream.Write(data[(cycles * ushort.MaxValue)..data.Length], 0, finalLength);
         }
 
-        protected virtual void Dispose(bool disposing)
-        {
-            if (!base.disposing)
-            {
-                if (disposing)
-                {
-                    
-                }
-            }
-        }
-
         public new void Dispose()
         {
             if (!disposing)
             {
+                GC.SuppressFinalize(this);
                 base.Dispose(); // turn off threads
                 stream.Close();
                 client.Close();
             }
-            GC.SuppressFinalize(this);
         }
+        
         ~NetChatClient()
         {
-            Dispose(false);
+            Dispose();
         }
     }
 }
