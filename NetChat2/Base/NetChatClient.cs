@@ -111,9 +111,10 @@ namespace NetChat2
                     stream.Read(commandBytes, 0, commandBytes.Length);
                 return commandBytes;
             }
-            catch
+            catch(ObjectDisposedException ex)
             {
-                throw;
+                if(disposing) return null;
+                throw ex;
             }
         }
 
@@ -198,30 +199,20 @@ namespace NetChat2
             }
         }
 
-        protected virtual void Dispose(bool disposing)
-        {
-            if (!base.disposing)
-            {
-                if (disposing)
-                {
-                    
-                }
-            }
-        }
-
         public new void Dispose()
         {
             if (!disposing)
             {
+                GC.SuppressFinalize(this);
                 base.Dispose(); // turn off threads
                 stream.Close();
                 client.Close();
             }
-            GC.SuppressFinalize(this);
         }
+        
         ~NetChatClient()
         {
-            Dispose(false);
+            Dispose();
         }
     }
 }

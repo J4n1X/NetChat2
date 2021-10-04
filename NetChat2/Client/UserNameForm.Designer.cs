@@ -73,7 +73,7 @@ namespace NetChat2
             this.MaximizeBox = false;
             this.MinimizeBox = false;
             this.Name = "UserNameForm";
-            this.Text = "UserNameForm";
+            this.Text = "Enter your Username";
             this.FormClosing += new System.Windows.Forms.FormClosingEventHandler(this.UserNameForm_FormClosing);
             this.ResumeLayout(false);
             this.PerformLayout();
