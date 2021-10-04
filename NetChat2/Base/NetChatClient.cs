@@ -3,11 +3,16 @@ using System.Collections.Generic;
 using System.Net.Sockets;
 using System.Net;
 using System.Text;
+using System.IO;
 
 namespace NetChat2
 {
-    internal class NetChatClient : ChatBase
+
+    internal abstract class NetChatClient : ChatBase
     {
+        /// <summary>
+        /// Deprecated.
+        /// </summary>
         public sealed class Packet
         {
             private byte flag;
@@ -59,32 +64,52 @@ namespace NetChat2
         }
 
         private NetworkStream stream;
-        private TcpClient client;
+        protected Serializer serializer;
+        protected TcpClient client;
+
+        public NetChatClient()
+        {
+            client = new TcpClient();
+            serializer = new Serializer();
+            available = false;
+        }
 
         public NetChatClient(TcpClient client)
         {
-            if (!client.Connected)
-                throw new ArgumentException("Client is not connected.");
             this.client = client;
+            serializer = new Serializer();
             this.stream = this.client.GetStream();
             this.available = true;
         }
 
-        public Packet Read()
+        public void Open(string peerIp, int port)
+        {
+            client ??= new TcpClient();
+            try
+            {
+                client.ConnectAsync(peerIp, port).Wait(TimeSpan.FromSeconds(10));
+                stream = client.GetStream();
+            }
+            catch (Exception e) // if the connection fails, then the server will be used
+            {
+                throw e;
+            }
+            this.available = true;
+        }
+
+        public byte[] Read()
         {
             if (!available)
                 throw new System.IO.IOException("Client is not available");
 
-            var retPacket = new Packet();
             try
             {
-                retPacket.Flag = (byte)stream.ReadByte();
-                byte[] buffer = new byte[2];
+                byte[] buffer = new byte[4];
                 stream.Read(buffer, 0, buffer.Length);
-                retPacket.SetDataSizeFromBytes(buffer);
-                if (retPacket.Size > 0)
-                    stream.Read(retPacket.Data, 0, retPacket.Data.Length);
-                return retPacket;
+                byte[] commandBytes = new byte[BitConverter.ToUInt32(buffer)];
+                if (commandBytes.Length > 0)
+                    stream.Read(commandBytes, 0, commandBytes.Length);
+                return commandBytes;
             }
             catch
             {
@@ -92,35 +117,85 @@ namespace NetChat2
             }
         }
 
+        public void ProcessCommand(byte[] data)
+        {
+            try
+            {
+                var commandString = Encoding.ASCII.GetString(data);
+                var command = serializer.Deserialize(commandString);
 
-        public void Write(TextFlags flags, byte[] data = null) => Write((byte)flags, data);
+                // Uncomment for a communication-dump after the connection has been estabilished.
+                //File.AppendAllText("communication.txt", Newtonsoft.Json.JsonConvert.SerializeObject(command, Newtonsoft.Json.Formatting.Indented) + "\n");
 
-        public void Write(DataFlags flags, byte[] data = null) => Write((byte)flags, data);
-        public void Write(ClientFlags flags, byte[] data = null) => Write((byte)flags, data);
+                switch (command.Type)
+                {
+                    case CommandTypes.Client:
+                        ProcessClientCommand(command);
+                        break;
+                    case CommandTypes.Server:
+                        ProcessServerCommand(command);
+                        break;
+                }
+            }
+            catch
+            {
+                return;
+            }
+        }
 
-        public void Write(ServerFlags flags, byte[] data = null) => Write((byte)flags, data);
-        public void Write(AdvancedFlags flags, byte[] data = null) => Write((byte)flags, data);
+        protected abstract void ProcessClientCommand(BaseCommand command);
+        protected abstract void ProcessServerCommand(BaseCommand command);
 
-        public void Write(byte flags, byte[] data = null)
+        public void WriteServerCommand(Guid serverGuid, Commands command, (string, string) data)
+        {
+            WriteServerCommand(serverGuid,
+                command, new Dictionary<string, string>()
+                {
+                    { data.Item1, data.Item2 }
+                });
+        }
+
+        public void WriteClientCommand(Guid clientGuid, Commands command, (string, string) data)
+        {
+            WriteClientCommand(clientGuid,
+                command, new Dictionary<string, string>()
+                {
+                    { data.Item1, data.Item2 }
+                });
+        }
+
+        public void WriteClientCommand(Guid clientGuid, Commands command, Dictionary<string, string> data = null)
+        {
+            Write(new BaseCommand(clientGuid, CommandTypes.Client, command, data));
+        }
+
+        public void WriteServerCommand(Guid serverGuid, Commands command, Dictionary<string, string> data = null)
+        {
+            Write(new BaseCommand(serverGuid, CommandTypes.Server, command, data));
+        }
+
+        public void Write(BaseCommand command) => Write(Encoding.ASCII.GetBytes(serializer.Serialize(command)));
+
+        public void Write(byte[] data)
         {
             if (!available)
                 throw new System.IO.IOException("Client is not available");
+            if (!client.Connected)
+                throw new ArgumentException("Client is not connected.");
 
-            data = data ?? new byte[0];
+            data ??= new byte[0];
             if (!client.Connected)
                 return;
-            int cycles = data.Length / ushort.MaxValue;
             var stream = client.GetStream();
-
-            stream.WriteByte(flags);
-            for (int i = 0; i < cycles; i++)
+            try
             {
-                stream.Write(BitConverter.GetBytes(ushort.MaxValue), 0, 2);
-                stream.Write(data[(i * ushort.MaxValue)..((i + 1) * ushort.MaxValue)], 0, ushort.MaxValue);
+                stream.Write(BitConverter.GetBytes(data.Length));
+                stream.Write(data);
             }
-            int finalLength = (data.Length - (ushort.MaxValue * cycles));
-            stream.Write(BitConverter.GetBytes((ushort)finalLength), 0, 2);
-            stream.Write(data[(cycles * ushort.MaxValue)..data.Length], 0, finalLength);
+            catch (Exception)
+            {
+                this.available = false;
+            }
         }
 
         protected virtual void Dispose(bool disposing)

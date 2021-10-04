@@ -20,9 +20,10 @@ namespace NetChat2
         #region Variables
 
         TcpListener listener;
-        CancellationTokenSource listenerToken = new CancellationTokenSource();
+        readonly CancellationTokenSource listenerToken = new CancellationTokenSource();
+        readonly Dictionary<Guid, ServerClient> clients = new Dictionary<Guid, ServerClient>();
 
-        Dictionary<Guid, ServerClient> clients = new Dictionary<Guid, ServerClient>();
+        Guid guid = Guid.NewGuid();
 
         #endregion
 
@@ -63,12 +64,21 @@ namespace NetChat2
         {
             try
             {
-                var newClient = new ServerClient(client);
-                if(newClient.Available)
-                newClient.OnText += ClientTextReceived;
+                var newClient = new ServerClient(client, guid);
+                if (newClient.Available)
+                    newClient.OnCommandBroadcastable += BroadcastClientCommand;
                 newClient.OnDisconnect += ClientDisconnect;
-                newClient.OnAdvancedCommand += ProcessAdvancedCommand;
+
+                // newClient.OnAdvancedCommand += ProcessAdvancedCommand;
                 clients.Add(newClient.Guid, newClient);
+                BroadcastCommand(new BaseCommand(
+                    guid, 
+                    CommandTypes.Server, 
+                    Commands.ServerText, 
+                    new Dictionary<string, string>(){
+                            { "TEXT", newClient.UserName + " has connected!\n" }
+                        }
+                    ));
             }
             catch (SocketException e)
             {
@@ -77,50 +87,33 @@ namespace NetChat2
             }
         }
 
-        
-        private void ProcessAdvancedCommand(object sender, string command)
-        {
-            switch (command.ToUpper())
-            {
-                case "GETUSERGUIDTABLE":
-                    var userNames = new List<byte>();
-                        ((ServerClient)sender).Write(AdvancedFlags.ServerRequest,
-                        AdvancedCommands.GetUsernameGuidTable(
-                            clients.Keys.ToArray(),
-                            clients.Values.Select(x => x.UserName).ToArray()
-                            )
-                        ); 
-                    break;
-            }
-
-        }
-
-        private void ClientTextReceived(object sender, string text, TextFlags flags)
+        private void BroadcastCommand(BaseCommand command)
         {
             if (!Available)
                 return;
-            SendText(text, flags);               
-        }
-
-        private void SendText(string text, TextFlags flags = (TextFlags.Unicode | TextFlags.NoUserName))
-        {
-            if (!Available)
-                return;
-            
-            byte[] messageBytes = GetTextBytes(text, flags);
             foreach (var client in clients.Values)
-            {
-                client.Write(flags, messageBytes);
-            }
+                client.Write(command);
+        }
+
+        private void BroadcastClientCommand(object sender, BaseCommand command)
+        {
+            BroadcastCommand(command);
         }
 
         private void ClientDisconnect(object sender)
         {
-
-            var client = ((ServerClient)sender);
+            var disconnectingClient = ((ServerClient)sender);
+            var command = new BaseCommand(
+                guid,
+                CommandTypes.Server,
+                Commands.ServerText,
+                new Dictionary<string, string>(){ 
+                    { "TEXT", disconnectingClient.UserName + " has disconnected!\n" }
+                });
+            // It's more user friendly if the user also sees that they have been disconnected.
+            BroadcastClientCommand(sender, command);
             clients.Remove(((ServerClient)sender).Guid);
-            SendText(client.UserName + " has disconnected!\n", TextFlags.Unicode | TextFlags.NoUserName);
-            client.Dispose();
+            disconnectingClient.Dispose();
         }
 
         public new void Dispose()
@@ -130,6 +123,7 @@ namespace NetChat2
             {
                 if (client.Value.Available)
                 {
+                    client.Value.WriteServerCommand(guid, Commands.ServerClosing);
                     client.Value.Dispose();
                     clients.Remove(client.Key);
                 }

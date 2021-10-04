@@ -8,13 +8,13 @@ using System.Threading.Tasks;
 
 namespace NetChat2
 {
-    class Client : ChatBase
+    class Client : NetChatClient
     {
         #region Events
         public delegate void OnServerConnectCallback(object sender, string message);
         public event OnServerConnectCallback OnServerConnect;
 
-        public delegate void OnServerDisconnectCallback(object sender, string message);
+        public delegate void OnServerDisconnectCallback(object sender);
         public event OnServerDisconnectCallback OnServerDisconnect;
 
         public delegate void OnServerConnectFailCallback(object sender, string reason);
@@ -23,19 +23,19 @@ namespace NetChat2
         public delegate void OnBytesFromServerCallback(object sender, byte[] bytes);
         public event OnBytesFromServerCallback OnBytesFromServer;
 
-        public delegate void OnTextFromServerCallback(object sender, string text);
-        public event OnTextFromServerCallback OnTextFromServer;
+        public delegate void OnTextCallback(object sender, BaseCommand command);
+        public event OnTextCallback OnText;
 
         #endregion
 
         #region Variables
 
-        public NetChatClient client;
+        private Guid clientGuid;
+        public Guid ClientGuid { get { return clientGuid; } }
 
-        private Guid clientID;
-        public Guid ClientID { get { return clientID; } }
+        private Guid serverGuid;
 
-        private IPAddress serverAddress;
+        private readonly IPAddress serverAddress;
         public IPAddress ServerAddress { get { return serverAddress; } }
         private string userName = "";
         public string UserName
@@ -46,85 +46,52 @@ namespace NetChat2
 
         #endregion
 
-        public Client() { }
-
-        public void Connect(string peerIp, int port, string userName)
+        public Client(string peerIp, int port, string userName) : base() 
         {
-            if (!available)
+            localAddress = GetLocalIPAddress();
+            serverAddress = IPAddress.Parse(peerIp);
+            this.port = port;
+            this.userName = userName;
+            serializer = new Serializer();
+        }
+
+        public void Connect()
+        {
+            if (!client.Connected)
+                base.Open(serverAddress.ToString(), port);
+            var readyCommand = serializer.Deserialize(Encoding.ASCII.GetString(Read()));
+            if (readyCommand.Command == Commands.ServerReady)
             {
-                localAddress = GetLocalIPAddress();
-                serverAddress = IPAddress.Parse(peerIp);
-                this.port = port;
-                this.userName = userName;
-                var newClient = new TcpClient();
-                try
+                serverGuid = Guid.Parse(readyCommand.Data["SERVERGUID"]);
+                WriteClientCommand(clientGuid, Commands.ClientConnect, ("USERNAME", userName));
+                var result = serializer.Deserialize(Encoding.ASCII.GetString(Read()));
+                if (result.Command == Commands.ServerConnectFailInvalidUserName)
+                    throw new ArgumentException("The Username specified is invalid!");
+                else if (result.Command == Commands.ServerInvalidCommand)
+                    throw new Exception("An invalid command has been sent to the server");
+                else
+                    clientGuid = Guid.Parse(result.Data["CLIENTGUID"]);
+
+                ThreadPool.QueueUserWorkItem(delegate
                 {
-                    try
-                    {
-                        newClient.ConnectAsync(peerIp, port).Wait(TimeSpan.FromSeconds(10));
-                    }
-                    catch (Exception e) // if the connection fails, then the server will be used
-                    {
-                        OnServerConnectFail(this, $"Connection failed with this error:\n{e.ToString()}");
-                        return;
-                    }
+                    Thread.CurrentThread.Name = "Client Thread";
+                    while (!disposing)
+                        Update();
+                });
 
-                    if (newClient.Connected)
-                    {
-                        client = new NetChatClient(newClient);
-
-                        if (((ServerFlags)client.Read().Flag != ServerFlags.Ready))
-                            return;
-
-                        client.Write(ClientFlags.Connect, GetTextBytes(userName, TextFlags.Unicode));
-
-                        //byte[] buffer = GetTextBytes(userName, TextFlags.Unicode);
-                        //clientStream.WriteByte((byte)ClientFlags.Connect);
-                        //clientStream.WriteByte((byte)buffer.Length);
-                        //clientStream.Write(buffer, 0, buffer.Length);
-                        //ServerFlags response = (ServerFlags)clientStream.ReadByte();
-                        var response = client.Read();
-                        if ((ServerFlags)response.Flag == ServerFlags.ConnectSuccess)
-                        {
-                            if (response.Size == 16)
-                                clientID = new Guid(response.Data);
-                            else
-                                throw new DataMisalignedException();
-                            string connectMessage = String.Format(
+                string connectMessage = String.Format(
                                 "Successfully connected to {0}!\nGUID: {1}\nUsername: {2}\n",
                                 serverAddress,
-                                clientID,
+                                clientGuid,
                                 UserName
                             );
+                OnServerConnect?.Invoke(this, connectMessage);
+                available = true;
 
-                            ThreadPool.QueueUserWorkItem(delegate
-                            {
-                                Thread.CurrentThread.Name = "Client Thread";
-                                while (!disposing)
-                                    Update();
-                            });
-                            
-                            if (OnServerConnect != null) OnServerConnect(this, connectMessage);
-                        }
-                        else if(((ServerFlags)client.Read().Flag != ServerFlags.InvalidUserName))
-                        {
-                            if(OnServerConnectFail != null) OnServerConnectFail(this, "The Username specified is invalid or too long.");
-                            return;
-                        }
-
-                        available = true;
-                    }
-                    else
-                    {
-                        if(OnServerConnectFail != null) OnServerConnectFail(this, "Connection failed because of an unknown error.");
-                        return;
-                    }
-                }
-                catch (SocketException e)
-                {
-                    Console.WriteLine("SocketException: {0}", e);
-                    throw;
-                }
+            }
+            else
+            {
+                throw new Exception("The server sent a different message than \"SERVER_READY\"");
             }
         }
 
@@ -132,53 +99,67 @@ namespace NetChat2
         {
             try
             {
-                var command = client.Read();
-
-                if(command.Flag == 255)
-                    throw new System.IO.IOException("Failed to read from Stream");
-
-                switch (command.Flag & 0b00001111) 
-                {
-                    case (byte)TextFlags.Base: // Text
-                        {
-                            // decode so we can do things like filter text later
-                            string message = GetText(command.Data, (TextFlags)command.Flag);
-                            if (OnTextFromServer != null) OnTextFromServer(this, message);
-                            break;
-                        }
-
-                    case (byte)DataFlags.Base: // Data
-                        break;
-                    case (byte)ServerFlags.Base: // Server responses
-                        break;
-                } 
+                ProcessCommand(Read());
             }
-            catch (System.IO.IOException e)
+            catch (System.IO.IOException)
             {
                 // Simply close client
                 Dispose();
             }
         }
 
+        protected override void ProcessClientCommand(BaseCommand command)
+        {
+            switch (command.Command)
+            {
+                case Commands.ClientConnect:
+                case Commands.ClientDisconnect:
+                    break;
+                case Commands.ClientText:
+                    OnText(this, command);
+                    break;
+            }
+        }
+
+        protected override void ProcessServerCommand(BaseCommand command)
+        {
+            switch (command.Command)
+            {
+                case Commands.ServerText:
+                    OnText?.Invoke(this, command);
+                    break;
+                case Commands.ServerClosing:
+                    OnServerDisconnect?.Invoke(this);
+                    break;
+                default:
+                    throw new NotImplementedException("A client cannot send server commands");
+            }
+            
+        }
+
+
 
         // sends text to server
-        public void SendText(string text, TextFlags flags)
+        public void SendText(string text)
         {
             if (!available) 
                 return;
 
             //if (flags != TextFlags.NoUserName)
             //    text = '<' + userName + "> " + text;
-           client.Write(TextFlags.Unicode, GetTextBytes(text, TextFlags.Unicode));
-
+            var args = new Dictionary<string, string>()
+            {
+                {"USERNAME", userName },
+                {"TEXT", text }
+            };
+            WriteClientCommand(clientGuid, Commands.ClientText, args);
         }
 
         public void Disconnect()
         {
-            if (!available)
+            if (!client.Connected)
                 return;
-            client.Write(ClientFlags.Disconnect);
-            client.Dispose();
+            WriteClientCommand(clientGuid, Commands.ClientDisconnect);
             available = false;
         }
 
@@ -199,10 +180,11 @@ namespace NetChat2
         {
             if (client != null)
             {
-                if (client.Available)
+                if (available)
                 {
-                    base.Dispose();
                     Disconnect();
+                    base.Dispose();
+                    available = false;
                 }
             }
         }

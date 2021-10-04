@@ -107,7 +107,7 @@ namespace NetChat2
             this.connectButton.TabIndex = 5;
             this.connectButton.Text = "Connect";
             this.connectButton.UseVisualStyleBackColor = true;
-            this.connectButton.Click += new System.EventHandler(this.connectButton_Click);
+            this.connectButton.Click += new System.EventHandler(this.ConnectButton_Click);
             // 
             // listenButton
             // 
@@ -117,7 +117,7 @@ namespace NetChat2
             this.listenButton.TabIndex = 6;
             this.listenButton.Text = "Listen";
             this.listenButton.UseVisualStyleBackColor = true;
-            this.listenButton.Click += new System.EventHandler(this.listenButton_Click);
+            this.listenButton.Click += new System.EventHandler(this.ListenButton_Click);
             // 
             // inputTextBox
             // 
@@ -127,7 +127,7 @@ namespace NetChat2
             this.inputTextBox.Name = "inputTextBox";
             this.inputTextBox.Size = new System.Drawing.Size(356, 23);
             this.inputTextBox.TabIndex = 7;
-            this.inputTextBox.KeyDown += new System.Windows.Forms.KeyEventHandler(this.inputTextBox_KeyDown);
+            this.inputTextBox.KeyDown += new System.Windows.Forms.KeyEventHandler(this.InputTextBox_KeyDown);
             // 
             // sendButton
             // 
@@ -138,7 +138,7 @@ namespace NetChat2
             this.sendButton.TabIndex = 8;
             this.sendButton.Text = "Send";
             this.sendButton.UseVisualStyleBackColor = true;
-            this.sendButton.Click += new System.EventHandler(this.sendButton_Click);
+            this.sendButton.Click += new System.EventHandler(this.SendButton_Click);
             // 
             // statusStrip1
             // 
@@ -191,7 +191,7 @@ namespace NetChat2
             this.sendDisconnectCommandToolStripMenuItem.Name = "sendDisconnectCommandToolStripMenuItem";
             this.sendDisconnectCommandToolStripMenuItem.Size = new System.Drawing.Size(222, 22);
             this.sendDisconnectCommandToolStripMenuItem.Text = "Send Disconnect Command";
-            this.sendDisconnectCommandToolStripMenuItem.Click += new System.EventHandler(this.sendDisconnectCommandToolStripMenuItem_Click);
+            this.sendDisconnectCommandToolStripMenuItem.Click += new System.EventHandler(this.SendDisconnectCommandToolStripMenuItem_Click);
             // 
             // getUsernameAndGUIDsToolStripMenuItem
             // 

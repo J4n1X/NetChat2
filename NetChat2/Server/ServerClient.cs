@@ -2,40 +2,41 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
-using System.Threading.Tasks;
 
 namespace NetChat2
 {
     class ServerClient : NetChatClient
     {
         #region Events
-        public delegate void OnAdvancedCommandCallBack(object sender, string command);
-        public event OnAdvancedCommandCallBack OnAdvancedCommand;
+        public delegate void OnCommandServerQueryCallback(object sender, string command);
+        public event OnCommandServerQueryCallback OnCommandServerQuery;
 
         public delegate void OnBytesCallback(object sender, byte[] bytes);
         public event OnBytesCallback OnBytes;
 
-        public delegate void OnTextCallback(object sender, string text, TextFlags flags);
-        public event OnTextCallback OnText;
+        public delegate void OnBroadcastableCallback(object sender, BaseCommand command);
+        public event OnBroadcastableCallback OnCommandBroadcastable;
 
         public delegate void OnDisconnectCallback(object sender);
         public event OnDisconnectCallback OnDisconnect;
 
         #endregion
 
-        private IPAddress ipAddress;
+        private readonly IPAddress ipAddress;
 
-        private string userName;
+        private readonly string userName;
         public string UserName { get { return userName; } }
+
+        private Guid serverGuid;
 
         private Guid guid;
         public Guid Guid { get { return guid; } }
 
         // Create Client from already connected TcpClient that has also negotiated.
-        public ServerClient(Guid guid, string userName, TcpClient client) : base(client)
+        public ServerClient(Guid clientGuid, string userName, TcpClient client) : base(client)
         {
             this.userName = userName;
-            this.guid = guid;
+            this.guid = clientGuid;
             ipAddress = ((IPEndPoint)client.Client.RemoteEndPoint).Address;
 
             StartTask();
@@ -43,26 +44,31 @@ namespace NetChat2
         }
 
         // Negotiate with Client, then commence
-        public ServerClient(TcpClient client) : base(client)
+        public ServerClient(TcpClient client, Guid serverGuid) : base(client)
         {
-            Write(ServerFlags.Ready);
-            var connectRequest = Read();
-            if ((ClientFlags)connectRequest.Flag != ClientFlags.Connect)
+            this.serverGuid = serverGuid;
+
+            WriteServerCommand(serverGuid, Commands.ServerReady, ("SERVERGUID", serverGuid.ToString()));
+
+            var connectRequest = serializer.Deserialize(Read());
+            if (connectRequest.Command != Commands.ClientConnect)
             {
-                Write(ServerFlags.InvalidCommand);
+                WriteServerCommand(serverGuid, Commands.ServerInvalidCommand);
                 return;
             }
-            if (connectRequest.Size > 255)
+            if (connectRequest.Data["USERNAME"].Length > 255)
             {
-                Write(ServerFlags.InvalidUserName);
+                WriteServerCommand(serverGuid, Commands.ServerConnectFailInvalidUserName);
                 return;
             }
-            this.userName = GetText(connectRequest.Data, TextFlags.Unicode);
+            this.userName = connectRequest.Data["USERNAME"];
             this.guid = Guid.NewGuid();
             ipAddress = ((IPEndPoint)client.Client.RemoteEndPoint).Address;
-            Write(ServerFlags.ConnectSuccess, guid.ToByteArray());
-            
+
+            WriteServerCommand(serverGuid, Commands.ServerConnectSuccess, ("CLIENTGUID", guid.ToString()));
+
             StartTask();
+
             available = true;
         }
 
@@ -75,7 +81,7 @@ namespace NetChat2
                 {
                     try
                     {
-                        ReadClient(Read());
+                        ProcessCommand(Read());
                     }
                     catch
                     {
@@ -87,57 +93,32 @@ namespace NetChat2
             });
         }
 
-        private void ReadClient(Packet command)
+        protected override void ProcessClientCommand(BaseCommand command)
         {
-            try
+            switch (command.Command)
             {
-                switch (command.Flag & 0b00001111) 
-                {
-                    case (byte)TextFlags.Base: // Text
-                        ReadClientText(command);
-                        break;
-                    case (byte)DataFlags.Base: // Data
-                        break;
-                    case (byte)ClientFlags.Base:
-                        ReadClientCommand(command);
-                        break;
-                    case (byte)ServerFlags.Base: // Server responses
-                        break;
-                    case (byte)AdvancedFlags.Base: // Advanced Server Command
-                        // Jump back to server in order to handle execution
-                        OnAdvancedCommand(this, GetText(command.Data, TextFlags.Ascii));
-                        break;
-                } // Server responses
-            }
-            catch
-            {
-                return;
+                case Commands.ClientConnect:
+                    Write(new BaseCommand(serverGuid, CommandTypes.Server, Commands.ServerInvalidCommand));
+                    break;
+                case Commands.ClientDisconnect:
+                    OnDisconnect?.Invoke(this);
+
+                    break;
+                case Commands.ClientText:
+                    OnCommandBroadcastable?.Invoke(this, command);
+                    break;
             }
         }
 
-        private void ReadClientText(Packet command)
+        protected override void ProcessServerCommand(BaseCommand command)
         {
-            var textFlag = (TextFlags)command.Flag;
-
-            // decode so we can do things like filter text later
-            string message = GetText(command.Data, textFlag);
-            if (textFlag != TextFlags.NoUserName)
-                message = "<" + userName + "> " + message;
-
-            if (OnText != null) OnText(this, message, textFlag);
-        }
-
-        private void ReadClientCommand(Packet command)
-        {
-            switch ((ClientFlags)command.Flag)
+            switch (command.Command)
             {
-                case ClientFlags.Connect:
+                case Commands.ServerText:
+                    OnCommandBroadcastable?.Invoke(this, command);
                     break;
-                case ClientFlags.Disconnect:
-                    if (OnDisconnect != null) OnDisconnect(this);
-                    break;
-                case ClientFlags.Extended:
-                    break;
+                default:
+                    throw new NotImplementedException("A client cannot send server commands");
             }
         }
 

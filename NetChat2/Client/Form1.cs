@@ -12,20 +12,10 @@ namespace NetChat2
         public Form1()
         {
             InitializeComponent();
-            ToastNotificationManagerCompat.OnActivated += toast_OnActivation;
+            ToastNotificationManagerCompat.OnActivated += Toast_OnActivation;
         }
 
-        private void bindClientEvents()
-        {
-            if (client == null)
-                throw new ArgumentException("Client is not initialized");
-            client.OnServerConnect += client_Connected;
-            client.OnTextFromServer += client_TextFromClient;
-            client.OnServerConnectFail += client_ConnectionFail;
-            client.OnServerDisconnect += client_Disconnected;
-        }
-
-        private void connectButton_Click(object sender, EventArgs e)
+        private void ConnectButton_Click(object sender, EventArgs e)
         {
             int port = 0;
             if (!(Int32.TryParse(portTextBox.Text, out port) && IPAddress.TryParse(ipTextBox.Text, out _)))
@@ -34,14 +24,18 @@ namespace NetChat2
             if (userNameForm.ShowDialog() == DialogResult.Cancel)
                 return;
 
-            client = new Client();
-            bindClientEvents();
-            client.Connect(ipTextBox.Text, port, userNameForm.UserName);
-
+            client = new Client(ipTextBox.Text, port, userNameForm.UserName);
+            if (client == null)
+                throw new ArgumentException("Client is not initialized");
+            client.OnServerConnect += Client_Connected;
+            client.OnText += Client_Text;
+            client.OnServerConnectFail += Client_ConnectionFail;
+            client.OnServerDisconnect += Client_Disconnected;
             connectionStatusLabel.Text = "Connecting to " + ipTextBox.Text + "...";
+            client.Connect();
         }
 
-        private void listenButton_Click(object sender, EventArgs e)
+        private void ListenButton_Click(object sender, EventArgs e)
         {
             int port = 0;
             if (!(int.TryParse(portTextBox.Text, out port) && IPAddress.TryParse(ipTextBox.Text, out _)))
@@ -51,26 +45,30 @@ namespace NetChat2
                 return;
             server = new Server(ipTextBox.Text, port);
 
-            client = new Client();
-            bindClientEvents();
-            client.Connect(ipTextBox.Text, port, userNameForm.UserName);
-
+            client = new Client(ipTextBox.Text, port, userNameForm.UserName);
             connectionStatusLabel.Text = "Hosting on " + ipTextBox.Text + " Port " + port;
+            if (client == null)
+                throw new ArgumentException("Client is not initialized");
+            client.OnServerConnect += Client_Connected;
+            client.OnText += Client_Text;
+            client.OnServerConnectFail += Client_ConnectionFail;
+            client.OnServerDisconnect += Client_Disconnected;
+            client.Connect();
         }
 
-        private void client_Connected(object sender, string message)
+        private void Client_Connected(object sender, string message)
         {
             connectionStatusLabel.Text = "Connected to Server!";
             historyTextBox.Text += message;
             this.Text = "Connected as " + client.UserName + " | NetChat 2";
         }
 
-        private void client_ConnectionFail(object sender, string reason)
+        private void Client_ConnectionFail(object sender, string reason)
         {
             MessageBox.Show(reason, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
 
-        private void client_Disconnected(object sender, string reason = "")
+        private void Client_Disconnected(object sender)
         {
             if (!client.Available)
                 return;
@@ -79,24 +77,27 @@ namespace NetChat2
             connectionStatusLabel.Text = "Not Connected!";
         }
 
-        private void client_TextFromClient(object sender, string text)
+        private void Client_Text(object sender, BaseCommand command)
         {
             Invoke((MethodInvoker)delegate
             {
+                string text = command.Data["TEXT"];
+                if (command.Command == Commands.ClientText)
+                    text = "<" + command.Data["USERNAME"] + "> " + text;
                 // Running on the UI thread
                 historyTextBox.Text += text;
                 if (WindowState == FormWindowState.Minimized)
                 {
                     new ToastContentBuilder()
-                    .AddText("New Message!")
-                    .AddText(text)
+                    .AddText("New Message from " + command.Data["USERNAME"] + "!")
+                    .AddText(command.Data["TEXT"])
                     .Show();
                     this.FlashWindowEx();
                 }
             });
         }
 
-        private void toast_OnActivation(ToastNotificationActivatedEventArgsCompat toastArgs)
+        private void Toast_OnActivation(ToastNotificationActivatedEventArgsCompat toastArgs)
         {
             /* Use these commands to get arguments and further input.
              * https://docs.microsoft.com/en-us/windows/apps/design/shell/tiles-and-notifications/send-local-toast?tabs=desktop
@@ -110,7 +111,7 @@ namespace NetChat2
         }
 
 
-        private void inputTextBox_KeyDown(object sender, KeyEventArgs e)
+        private void InputTextBox_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.KeyCode == Keys.Enter)
             {
@@ -119,7 +120,7 @@ namespace NetChat2
                     if (inputTextBox.Text.Length > 0)
                     {
                         string message = inputTextBox.Text + '\n';
-                        client.SendText(message, TextFlags.Unicode);
+                        client.SendText(message);
                         //historyTextBox.Text += message;
                         inputTextBox.Text = "";
                     }
@@ -127,14 +128,14 @@ namespace NetChat2
             }
         }
 
-        private void sendButton_Click(object sender, EventArgs e)
+        private void SendButton_Click(object sender, EventArgs e)
         {
             if (client.Available)
             {
                 if (inputTextBox.Text.Length > 0)
                 {
                     string message = inputTextBox.Text + '\n';
-                    client.SendText(message, TextFlags.Unicode);
+                    client.SendText(message);
                     //historyTextBox.Text += message;
                     inputTextBox.Text = "";
                 }
@@ -148,9 +149,9 @@ namespace NetChat2
             client.Dispose();
         }
 
-        private void sendDisconnectCommandToolStripMenuItem_Click(object sender, EventArgs e)
+        private void SendDisconnectCommandToolStripMenuItem_Click(object sender, EventArgs e)
         {
-            client_Disconnected(sender, "Client closed connection.");
+            Client_Disconnected(sender);
         }
     }
 }
