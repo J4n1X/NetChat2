@@ -26,24 +26,34 @@ namespace NetChat2
 
 
     #region Command Classes
-    public class BaseCommand
+    public class CommandObject
     {
         public Guid SenderGuid { get; set; }
         [JsonConverter(typeof(StringEnumConverter))]
         public CommandTypes Type { get; set; }
         [JsonConverter(typeof(StringEnumConverter))]
-        public Commands Command { get; set; }
+        public BaseCommand Command { get; set; }
         public DateTime CreatedAt { get; set; }
 
         public Dictionary<string, string> Data { get; set; }
 
-        public BaseCommand(Guid guid, CommandTypes commandType, Commands command, Dictionary<string, string> data = null)
+        public CommandObject(Guid guid, CommandTypes commandType, BaseCommand command, params ValueTuple<string, string>[] data)
         {
             SenderGuid = guid;
             Type = commandType;
             Command = command;
             CreatedAt = DateTime.Now;
-            if (data != null) Data = data;
+            Data ??= data.ToDictionary(x => x.Item1, x => x.Item2);
+        }
+
+        [JsonConstructor]
+        public CommandObject(Guid guid, CommandTypes commandType, BaseCommand command, Dictionary<string, string> data = null)
+        {
+            SenderGuid = guid;
+            Type = commandType;
+            Command = command;
+            CreatedAt = DateTime.Now;
+            Data ??= data;
         }
     }
 
@@ -53,21 +63,95 @@ namespace NetChat2
         Server = 1
     }
 
-    public enum Commands
+    public enum BaseCommand
     {
-        ClientConnect,
-        ClientDisconnect,
-        ClientText,
+        CLIENT_CONNECT,                          // Used to request a connection
+        CLIENT_ABORT,                            // Used to abort a connection request
+        CLIENT_DISCONNECT,                       // Used to announce a disconnect
+        CLIENT_TEXT,                             // Used to broadcast text to all other clients
+        CLIENT_ADVANCEDCOMMAND,                  // Used to order server to process Command
 
-        ServerReady,
-        ServerConnectSuccess,
-        ServerInvalidCommand,
-        ServerConnectFailInvalidUserName,
-        ServerText,
-        ServerClosing,
+        SERVER_READY,                            // Used to signal client that the server is ready
+        SERVER_CONNECT_SUCCESS,                  // Used to signal client that the connection was established
+        SERVER_INVALID_COMMAND,                  // Used to reject client in case of invalid command
+        SERVER_CONNECTION_FAILED,                // Used to reject client connection attempt because of invalid args
+        SERVER_TEXT,                             // Used to broadcast a server message to all clients
+        SERVER_ADVANCEDCOMMANDRESULT,            // Used to return Command result
+        SERVER_CLOSING,                          // Used to broadcast to all clients that the server is stopping
+    }
+
+    public enum AdvancedClientCommand
+    {
+        GETUSERUUIDS,
+        WHISPER,
+    }
+
+    public sealed class Errors
+    {
+        public enum Reasons
+        {
+            INVALID_USERNAME,                           // When Username is invalid
+            VERSION_MISMATCH,                           // When Server and Client Versions don't match
+            INVALID_COMMAND,                            // When the Command is invalid or does not exist
+            INVALID_COMMAND_ARGS,                       // When the Command arguments are invalid or missing
+            INVALID_COMMAND_CONTEXT,                    // When the Command is not allowed in this context
+        }
+
+        // base class for indexer
+        public class ReasonTexts
+        {
+            private static readonly Dictionary<Reasons, string> texts = new Dictionary<Reasons, string> {
+                    {Reasons.INVALID_USERNAME, "The Username specified is invalid."},
+                    {Reasons.VERSION_MISMATCH, "The Versions of Client and Server do not match."},
+                    {Reasons.INVALID_COMMAND, "The Command specified is invalid or does not exist."},
+                    {Reasons.INVALID_COMMAND_ARGS, "The Command Arguments specified are invalid."}
+                };
+            public string this[Reasons r]
+            {
+                get
+                {
+                    return texts[r] ?? "An error occurred while processing the request.";
+                }
+            }
+
+            public string this[string s]
+            {
+                get
+                {
+                    return texts[(Reasons)Enum.Parse(typeof(Reasons), s)];
+                }
+            }
+        }
+
+        private static readonly ReasonTexts texts = new ReasonTexts();
+        public static ReasonTexts ReasonText { get { return texts; } }
+
     }
 
     #endregion
+
+    public class InvalidVersionException : Exception
+    {
+        public Version ClientVersion { get; set; }
+        public Version ServerVersion { get; set; }
+        public InvalidVersionException(
+            Version clientVersion, 
+            Version serverVersion, 
+            string message = "Client-Server version mismatch") 
+            : base(message)
+        {
+            ClientVersion = clientVersion;
+            ServerVersion = serverVersion;
+        }
+    }
+
+    public class InvalidCommandException : Exception
+    {
+        public Version ProgramVersion { get; set; }
+        public InvalidCommandException(string message = "Invalid Command received") : base(message)
+        {
+        }
+    }
 
     public class Serializer
     {
@@ -78,7 +162,7 @@ namespace NetChat2
         /// </summary>
         /// <param name="toSerialize">The Object that is to be serialized</param>
         /// <returns>A JSON representation of this object</returns>
-        public string Serialize(BaseCommand toSerialize)
+        public string Serialize<TValue>(TValue toSerialize)
         {
             using StringWriter writer = new StringWriter();
             serializer.Serialize(writer, toSerialize);
@@ -91,7 +175,7 @@ namespace NetChat2
         /// <typeparam name="TValue"></typeparam>
         /// <param name="jsonStringBytes"></param>
         /// <returns></returns>
-        public BaseCommand Deserialize(byte[] jsonStringBytes) => Deserialize(Encoding.ASCII.GetString(jsonStringBytes));
+        public T Deserialize<T>(byte[] jsonStringBytes) => Deserialize<T>(Encoding.ASCII.GetString(jsonStringBytes));
 
         /// <summary>
         /// Deserializes a JSON string into the type specified.
@@ -99,11 +183,11 @@ namespace NetChat2
         /// <typeparam name="TValue">The Type of the deserialized Object</typeparam>
         /// <param name="jsonString">The serialized Object String</param>
         /// <returns></returns>
-        public BaseCommand Deserialize(string jsonString)
+        public T Deserialize<T>(string jsonString)
         {
             using StringReader reader = new StringReader(jsonString);
             using JsonTextReader jsonReader = new JsonTextReader(reader);
-            return serializer.Deserialize<BaseCommand>(jsonReader);
+            return serializer.Deserialize<T>(jsonReader);
         }
 
         /// <summary>
@@ -142,8 +226,8 @@ namespace NetChat2
 
     abstract class ChatBase : IDisposable
     { 
-
         protected bool available = false;
+        public static Serializer JsonSerializer = new Serializer();
 
         public bool Available
         {

@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Linq;
+using System.Collections.Concurrent;
 
 namespace NetChat2
 {
@@ -21,19 +22,26 @@ namespace NetChat2
 
         TcpListener listener;
         readonly CancellationTokenSource listenerToken = new CancellationTokenSource();
-        readonly Dictionary<Guid, ServerClient> clients = new Dictionary<Guid, ServerClient>();
 
-        Guid guid = Guid.NewGuid();
+        // A reference of this will be passed to all the ServerClients
+        public static ConcurrentDictionary<Guid, ServerClient> Clients = new ConcurrentDictionary<Guid, ServerClient>();
+        public static bool ServerActive = false;
+
+        public static Guid Guid = Guid.NewGuid();
 
         #endregion
 
-        public Server() { }
+        public Server()
+        {
+        }
         public Server(string localIP, int port = 9000) => Listen(localIP, port);
 
         public void Listen(string localIP, int port = 9000)
         {
-            if (!available)
+            // Prevent server from starting if one is already active or if the server is already running
+            if (!available || !ServerActive)
             {
+                Clients.Clear();
                 this.port = port;
                 localAddress = IPAddress.Parse(localIP);
                 listener = new TcpListener(IPAddress.Any, this.port);
@@ -58,27 +66,20 @@ namespace NetChat2
                 });
             }
             this.available = true;
+            ServerActive = true;
         }
 
         private void ProcessNewClient(TcpClient client)
         {
             try
             {
-                var newClient = new ServerClient(client, guid);
-                if (newClient.Available)
-                    newClient.OnCommandBroadcastable += BroadcastClientCommand;
+                var newClient = new ServerClient(client, Guid);
+                //if (newClient.Available)
+                //    newClient.OnCommandBroadcastable += BroadcastClientCommand;
                 newClient.OnDisconnect += ClientDisconnect;
 
                 // newClient.OnAdvancedCommand += ProcessAdvancedCommand;
-                clients.Add(newClient.Guid, newClient);
-                BroadcastCommand(new BaseCommand(
-                    guid, 
-                    CommandTypes.Server, 
-                    Commands.ServerText, 
-                    new Dictionary<string, string>(){
-                            { "TEXT", newClient.UserName + " has connected!\n" }
-                        }
-                    ));
+                Clients.TryAdd(newClient.Guid, newClient);
             }
             catch (SocketException e)
             {
@@ -87,45 +88,36 @@ namespace NetChat2
             }
         }
 
-        private void BroadcastCommand(BaseCommand command)
+        public static void BroadcastServerCommand(BaseCommand command, params ValueTuple<string, string>[] data)
         {
-            if (!Available)
-                return;
-            foreach (var client in clients.Values)
-                client.Write(command);
+            var args = new Dictionary<string, string>();
+            BroadcastCommand(new CommandObject(Server.Guid, CommandTypes.Server, command, data.ToDictionary(x => x.Item1, x => x.Item2)));
         }
 
-        private void BroadcastClientCommand(object sender, BaseCommand command)
+        public static void BroadcastCommand(CommandObject command)
         {
-            BroadcastCommand(command);
+            if (!ServerActive)
+                return;
+            foreach (var client in Server.Clients.Values)
+                client.Write(command);
         }
 
         private void ClientDisconnect(object sender)
         {
-            var disconnectingClient = ((ServerClient)sender);
-            var command = new BaseCommand(
-                guid,
-                CommandTypes.Server,
-                Commands.ServerText,
-                new Dictionary<string, string>(){ 
-                    { "TEXT", disconnectingClient.UserName + " has disconnected!\n" }
-                });
-            // It's more user friendly if the user also sees that they have been disconnected.
-            BroadcastClientCommand(sender, command);
-            clients.Remove(((ServerClient)sender).Guid);
-            disconnectingClient.Dispose();
+            Clients.Remove(((ServerClient)sender).Guid, out _);
         }
 
         public new void Dispose()
         {
+            ServerActive = false;
             disposing = true;
-            foreach (var client in clients)
+            foreach (var client in Clients)
             {
                 if (client.Value.Available)
                 {
-                    client.Value.WriteServerCommand(guid, Commands.ServerClosing);
-                    client.Value.Dispose();
-                    clients.Remove(client.Key);
+                    Clients.Remove(client.Key, out ServerClient removedClient);
+                    removedClient.WriteServerCommand(Guid, BaseCommand.SERVER_CLOSING);
+                    removedClient.Dispose();
                 }
             }
 

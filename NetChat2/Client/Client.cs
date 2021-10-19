@@ -4,7 +4,6 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
-using System.Threading.Tasks;
 
 namespace NetChat2
 {
@@ -23,8 +22,11 @@ namespace NetChat2
         public delegate void OnBytesFromServerCallback(object sender, byte[] bytes);
         public event OnBytesFromServerCallback OnBytesFromServer;
 
-        public delegate void OnTextCallback(object sender, BaseCommand command);
-        public event OnTextCallback OnText;
+        public delegate void OnUserMessageCallback(object sender, CommandObject command);
+        public event OnUserMessageCallback OnText;
+
+        public delegate void OnCommandTextResponseCallback(string text);
+        public event OnCommandTextResponseCallback OnCommandTextResponse;
 
         #endregion
 
@@ -43,32 +45,63 @@ namespace NetChat2
             get { return userName; }
             set { if (value.Length <= 64) userName = value; }
         }
-
         #endregion
 
-        public Client(string peerIp, int port, string userName) : base() 
+        public Client(string peerIp, int port, string userName) : base()
         {
             localAddress = GetLocalIPAddress();
             serverAddress = IPAddress.Parse(peerIp);
             this.port = port;
             this.userName = userName;
-            serializer = new Serializer();
+            JsonSerializer = new Serializer();
         }
 
         public void Connect()
         {
             if (!client.Connected)
                 base.Open(serverAddress.ToString(), port);
-            var readyCommand = serializer.Deserialize(Encoding.ASCII.GetString(Read()));
-            if (readyCommand.Command == Commands.ServerReady)
+            var readyCommand = JsonSerializer.Deserialize<CommandObject>(Encoding.ASCII.GetString(Read()));
+            if (readyCommand.Command == BaseCommand.SERVER_READY)
             {
                 serverGuid = Guid.Parse(readyCommand.Data["SERVERGUID"]);
-                WriteClientCommand(clientGuid, Commands.ClientConnect, ("USERNAME", userName));
-                var result = serializer.Deserialize(Encoding.ASCII.GetString(Read()));
-                if (result.Command == Commands.ServerConnectFailInvalidUserName)
-                    throw new ArgumentException("The Username specified is invalid!");
-                else if (result.Command == Commands.ServerInvalidCommand)
-                    throw new Exception("An invalid command has been sent to the server");
+                var serverVersion = Version.Parse(readyCommand.Data["VERSION"]);
+                var clientVersion = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
+                if (clientVersion != serverVersion)
+                    throw new InvalidVersionException(
+                        clientVersion,
+                        serverVersion,
+                        $"Invalid Server version {readyCommand.Data["VERSION"]}, Client version is {clientVersion}"
+                    );
+
+                WriteClientCommand(
+                    clientGuid,
+                    BaseCommand.CLIENT_CONNECT,
+                    ("USERNAME", userName),
+                    ("VERSION", clientVersion.ToString())
+                    );
+                var result = JsonSerializer.Deserialize<CommandObject>(Encoding.ASCII.GetString(Read()));
+                if (result.Command == BaseCommand.SERVER_CONNECTION_FAILED)
+                {
+                    var reason = (Errors.Reasons)Enum.Parse(typeof(Errors.Reasons), result.Data["REASON"]);
+                    if (reason == Errors.Reasons.INVALID_USERNAME)
+                    {
+                        throw new ArgumentException("The Username specified is invalid!");
+                    }
+                    else if (reason == Errors.Reasons.VERSION_MISMATCH)
+                    {
+                        throw new InvalidVersionException(
+                            clientVersion,
+                            serverVersion,
+                            $"Server reports invalid client version {clientVersion}, Server version is {serverVersion}"
+                        );
+                    }
+                }
+                else if (result.Command == BaseCommand.SERVER_INVALID_COMMAND)
+                    throw new InvalidCommandException(
+                        "An invalid command has been sent to the Server.\n" +
+                        $"Command sent: {BaseCommand.CLIENT_CONNECT} with data {("USERNAME", userName)}\n" +
+                        $"Server reported reason: {Errors.ReasonText[result.Data["REASON"]]}"
+                        );
                 else
                     clientGuid = Guid.Parse(result.Data["CLIENTGUID"]);
 
@@ -108,33 +141,56 @@ namespace NetChat2
             }
         }
 
-        protected override void ProcessClientCommand(BaseCommand command)
+        protected override void ProcessClientCommand(CommandObject command)
         {
             switch (command.Command)
             {
-                case Commands.ClientConnect:
-                case Commands.ClientDisconnect:
+                case BaseCommand.CLIENT_CONNECT:
+                case BaseCommand.CLIENT_DISCONNECT:
                     break;
-                case Commands.ClientText:
+                case BaseCommand.CLIENT_TEXT:
                     OnText(this, command);
                     break;
             }
         }
 
-        protected override void ProcessServerCommand(BaseCommand command)
+        protected override void ProcessServerCommand(CommandObject command)
         {
             switch (command.Command)
             {
-                case Commands.ServerText:
-                    OnText?.Invoke(this, command);
+                case BaseCommand.SERVER_TEXT:
+                    OnCommandTextResponse?.Invoke(command.Data["TEXT"]);
                     break;
-                case Commands.ServerClosing:
+                case BaseCommand.SERVER_CLOSING:
                     OnServerDisconnect?.Invoke(this);
+                    break;
+                case BaseCommand.SERVER_INVALID_COMMAND:
+                    OnCommandTextResponse?.Invoke(Errors.ReasonText[command.Data["REASON"]] + '\n');
+                    break;
+                case BaseCommand.SERVER_ADVANCEDCOMMANDRESULT:
+                    ProcessClientAdvancedCommandResponse(command);
                     break;
                 default:
                     throw new NotImplementedException("A client cannot send server commands");
             }
-            
+
+        }
+
+        private void ProcessClientAdvancedCommandResponse(CommandObject command)
+        {
+            if (Enum.TryParse(command.Data["COMMAND"].ToUpper(), out AdvancedClientCommand commandEnum))
+            {
+                switch(commandEnum)
+                {
+                    case AdvancedClientCommand.GETUSERUUIDS:
+                        OnCommandTextResponse(AdvancedCommands.Client.Processing.FormatUserUUIDs(command));
+                        break;
+                    case AdvancedClientCommand.WHISPER:
+                        OnCommandTextResponse(AdvancedCommands.Client.Processing.FormatWhisper(command));
+                        break;
+                }
+                return;
+            }
         }
 
 
@@ -142,24 +198,48 @@ namespace NetChat2
         // sends text to server
         public void SendText(string text)
         {
-            if (!available) 
+            if (!available)
                 return;
 
             //if (flags != TextFlags.NoUserName)
             //    text = '<' + userName + "> " + text;
-            var args = new Dictionary<string, string>()
+            WriteClientCommand(
+                clientGuid,
+                BaseCommand.CLIENT_TEXT,
+                ("TEXT", text)
+                );
+        }
+
+        public void SendCommand(string text)
+        {
+            if(text.Contains('(') && text.Contains(')'))
             {
-                {"USERNAME", userName },
-                {"TEXT", text }
-            };
-            WriteClientCommand(clientGuid, Commands.ClientText, args);
+                string command = text[1..text.IndexOf('(')]; // The Command itself
+                string[] commandArgs = text[(text.IndexOf('(') + 1)..text.LastIndexOf(')')].Split(','); // Arguments between the ( )
+
+                // if this is false, then just send a normal message instead
+                if (Enum.TryParse(command.ToUpper(), out AdvancedClientCommand commandEnum))
+                {
+                    WriteClientCommand(
+                    clientGuid,
+                    BaseCommand.CLIENT_ADVANCEDCOMMAND,
+                    ("COMMAND", commandEnum.ToString()),
+                    ("ARGS", JsonSerializer.Serialize(commandArgs))
+                    );
+                    return;
+                }
+            }
+            else
+            {
+                SendText(text + '\n');
+            }
         }
 
         public void Disconnect()
         {
             if (!client.Connected)
                 return;
-            WriteClientCommand(clientGuid, Commands.ClientDisconnect);
+            WriteClientCommand(clientGuid, BaseCommand.CLIENT_DISCONNECT);
             available = false;
         }
 

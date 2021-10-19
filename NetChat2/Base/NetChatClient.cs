@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Net;
 using System.Text;
 using System.IO;
+using System.Linq;
 
 namespace NetChat2
 {
@@ -64,20 +65,18 @@ namespace NetChat2
         }
 
         private NetworkStream stream;
-        protected Serializer serializer;
         protected TcpClient client;
 
         public NetChatClient()
         {
             client = new TcpClient();
-            serializer = new Serializer();
             available = false;
         }
 
         public NetChatClient(TcpClient client)
         {
             this.client = client;
-            serializer = new Serializer();
+            JsonSerializer = new Serializer();
             this.stream = this.client.GetStream();
             this.available = true;
         }
@@ -123,7 +122,7 @@ namespace NetChat2
             try
             {
                 var commandString = Encoding.ASCII.GetString(data);
-                var command = serializer.Deserialize(commandString);
+                var command = JsonSerializer.Deserialize<CommandObject>(commandString);
 
                 // Uncomment for a communication-dump after the connection has been estabilished.
                 //File.AppendAllText("communication.txt", Newtonsoft.Json.JsonConvert.SerializeObject(command, Newtonsoft.Json.Formatting.Indented) + "\n");
@@ -144,38 +143,32 @@ namespace NetChat2
             }
         }
 
-        protected abstract void ProcessClientCommand(BaseCommand command);
-        protected abstract void ProcessServerCommand(BaseCommand command);
+        protected abstract void ProcessClientCommand(CommandObject command);
+        protected abstract void ProcessServerCommand(CommandObject command);
 
-        public void WriteServerCommand(Guid serverGuid, Commands command, (string, string) data)
+        public void WriteServerCommand(Guid serverGuid, BaseCommand command, params ValueTuple<string, string>[] data)
         {
-            WriteServerCommand(serverGuid,
-                command, new Dictionary<string, string>()
-                {
-                    { data.Item1, data.Item2 }
-                });
+            var args = new Dictionary<string, string>();
+            WriteServerCommand(serverGuid, command, data.ToDictionary(x => x.Item1, x => x.Item2));
         }
 
-        public void WriteClientCommand(Guid clientGuid, Commands command, (string, string) data)
+        public void WriteClientCommand(Guid clientGuid, BaseCommand command, params ValueTuple<string, string>[] data)
         {
-            WriteClientCommand(clientGuid,
-                command, new Dictionary<string, string>()
-                {
-                    { data.Item1, data.Item2 }
-                });
+            var args = new Dictionary<string, string>();
+            WriteClientCommand(clientGuid, command, data.ToDictionary(x => x.Item1, x => x.Item2));
         }
 
-        public void WriteClientCommand(Guid clientGuid, Commands command, Dictionary<string, string> data = null)
+        public void WriteClientCommand(Guid clientGuid, BaseCommand command, Dictionary<string, string> data = null)
         {
-            Write(new BaseCommand(clientGuid, CommandTypes.Client, command, data));
+            Write(new CommandObject(clientGuid, CommandTypes.Client, command, data));
         }
 
-        public void WriteServerCommand(Guid serverGuid, Commands command, Dictionary<string, string> data = null)
+        public void WriteServerCommand(Guid serverGuid, BaseCommand command, Dictionary<string, string> data = null)
         {
-            Write(new BaseCommand(serverGuid, CommandTypes.Server, command, data));
+            Write(new CommandObject(serverGuid, CommandTypes.Server, command, data));
         }
 
-        public void Write(BaseCommand command) => Write(Encoding.ASCII.GetBytes(serializer.Serialize(command)));
+        public void Write(CommandObject command) => Write(Encoding.ASCII.GetBytes(JsonSerializer.Serialize(command)));
 
         public void Write(byte[] data)
         {
