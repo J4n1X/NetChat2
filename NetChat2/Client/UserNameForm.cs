@@ -17,7 +17,7 @@ namespace NetChat2
             DialogResult = DialogResult.Cancel;
         }
 
-        private void button1_Click(object sender, EventArgs e)
+        private void Button1_Click(object sender, EventArgs e)
         {
             if (textBox1.Text.Length == 0)
             {
@@ -35,7 +35,7 @@ namespace NetChat2
             this.Close();
         }
 
-        private void textBox1_KeyDown(object sender, KeyEventArgs e)
+        private void TextBox1_KeyDown(object sender, KeyEventArgs e)
         {
             if(e.KeyCode == Keys.Enter)
             {

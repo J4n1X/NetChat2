@@ -40,7 +40,7 @@ namespace NetChat2
             this.textBox1.Name = "textBox1";
             this.textBox1.Size = new System.Drawing.Size(138, 23);
             this.textBox1.TabIndex = 0;
-            this.textBox1.KeyDown += new System.Windows.Forms.KeyEventHandler(this.textBox1_KeyDown);
+            this.textBox1.KeyDown += new System.Windows.Forms.KeyEventHandler(this.TextBox1_KeyDown);
             // 
             // label1
             // 
@@ -59,7 +59,7 @@ namespace NetChat2
             this.button1.TabIndex = 2;
             this.button1.Text = "Confirm";
             this.button1.UseVisualStyleBackColor = true;
-            this.button1.Click += new System.EventHandler(this.button1_Click);
+            this.button1.Click += new System.EventHandler(this.Button1_Click);
             // 
             // UserNameForm
             // 
